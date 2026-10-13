@@ -1,0 +1,63 @@
+
+---
+
+## Finding: Unpatched MSSQL Instance with Information Disclosure via Public Role
+
+**Target:** SQL Server 16.0.1000.6 (SQL Server 2022, RTM — no Cumulative Updates applied)
+
+### Summary
+The target MSSQL instance is running an unpatched RTM build, placing it within the affected version range of multiple published CVEs. Systematic enumeration confirmed one actively exploitable issue (public-role information disclosure) while ruling out the common escalation mechanisms that would otherwise convert this into remote code execution.
+
+### CVEs in Scope
+| CVE | CVSS | Type |
+|---|---|---|
+| CVE-2026-40370 | 8.8 | RCE |
+| CVE-2025-47954 | 8.8 | Elevation of Privilege |
+| CVE-2025-59499 | 8.8 | Elevation of Privilege |
+| CVE-2025-49718 | 7.5 | Information Disclosure |
+| CVE-2024-37339 | 8.8 | RCE |
+| CVE-2023-21718 | — | Input Validation |
+
+### Evidence Collected
+
+**1. Version confirmation**
+```sql
+SELECT @@VERSION;
+SELECT SERVERPROPERTY('ProductVersion'), SERVERPROPERTY('ProductLevel');
+```
+→ Confirmed 16.0.1000.6, ProductLevel = RTM. No CU applied since GA release, placing the instance in the affected range for all CVEs listed above.
+
+**2. Confirmed exploitable issue — public role over-permissioning**
+```sql
+SELECT dp.permission_name, dp.state_desc, pr.name
+FROM sys.server_permissions dp
+JOIN sys.server_principals pr ON dp.grantee_principal_id = pr.principal_id;
+```
+→ `public` role holds `VIEW ANY DATABASE`. Any authenticated login — regardless of assigned privilege level — can enumerate the full database inventory via `sys.databases`. This satisfies the "authenticated low-privilege user" precondition described in CVE-2025-49718 (Information Disclosure, CVSS 7.5).
+
+**3. Escalation paths checked and ruled out**
+```sql
+-- IMPERSONATE grants
+SELECT pr.name, pe.permission_name FROM sys.server_permissions pe
+JOIN sys.server_principals pr ON pe.grantor_principal_id = pr.principal_id
+WHERE pe.permission_name = 'IMPERSONATE';
+-- Result: empty
+
+SELECT name, value_in_use FROM sys.configurations
+WHERE name IN ('xp_cmdshell','clr enabled','Ole Automation Procedures','Ad Hoc Distributed Queries');
+-- Result: all = 0
+```
+→ No impersonation chains available. All four standard SQLi-to-RCE mechanisms disabled.
+
+### Impact
+- **Confirmed:** Any authenticated principal can enumerate database names, creation dates, and metadata for every database on the instance, aiding reconnaissance for further attacks.
+- **Latent:** The build-level vulnerabilities (RCE/EoP CVEs) remain present in the binary and would become immediately exploitable if any of the disabled features (`xp_cmdshell`, CLR, etc.) were re-enabled, or if an alternate escalation vector (not covered by this enumeration) exists.
+
+### Remediation
+1. Apply the latest Cumulative Update for SQL Server 2022 to remediate all listed CVEs at the code level.
+2. Revoke `VIEW ANY DATABASE` from `public` unless business-justified; grant per-login instead.
+3. Maintain current hardening — keep `xp_cmdshell`, CLR, OLE Automation, and Ad Hoc Distributed Queries disabled unless explicitly required.
+4. Periodically re-audit `IMPERSONATE` and role membership grants, since these are common reintroduction points after schema changes.
+
+---
+
