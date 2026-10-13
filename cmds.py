@@ -53,3 +53,7 @@ WHERE pe.permission_name = 'IMPERSONATE';
 
 SELECT * FROM sys.dm_server_audit_status;
 SELECT * FROM sys.server_audits;
+
+
+SELECT name, value_in_use FROM sys.configurations 
+WHERE name IN ('Ole Automation Procedures', 'Ad Hoc Distributed Queries');
